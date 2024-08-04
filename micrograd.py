@@ -16,7 +16,7 @@ class Value:
 
     def __init__(self, data, _children=(), _op=''):
         self.data = data
-        self.grad = 0
+        self.grad = 0.0
         # internal variables used for autograd graph construction
         self._backward = lambda: None
         self._prev = set(_children)
@@ -76,7 +76,7 @@ class Value:
         out = Value(math.exp(self.data), (self,), 'exp')
 
         def _backward():
-            self.grad += math.exp(self.data) * out.grad
+            self.grad += out.data * out.grad
         out._backward = _backward
 
         return out
