@@ -15,20 +15,17 @@ gcc -O3 -Wall -Wextra -Wpedantic -fsanitize=address -fsanitize=undefined -o micr
 // random number generation
 
 // RNG structure to mimic Python's random interface
-typedef struct
-{
+typedef struct {
     uint64_t state;
 } RNG;
 
 // Initialize RNG with a seed
-void rng_init(RNG *rng, uint64_t seed)
-{
+void rng_init(RNG *rng, uint64_t seed) {
     rng->state = seed;
 }
 
 // Generate a random 32-bit unsigned integer
-uint32_t rng_random_u32(RNG *rng)
-{
+uint32_t rng_random_u32(RNG *rng) {
     rng->state ^= (rng->state >> 12);
     rng->state ^= (rng->state << 25);
     rng->state ^= (rng->state >> 27);
@@ -36,14 +33,12 @@ uint32_t rng_random_u32(RNG *rng)
 }
 
 // Generate a random float in [0, 1)
-float rng_random(RNG *rng)
-{
+float rng_random(RNG *rng) {
     return (rng_random_u32(rng) >> 8) / 16777216.0f;
 }
 
 // Generate a random float in [a, b)
-float rng_uniform(RNG *rng, float a, float b)
-{
+float rng_uniform(RNG *rng, float a, float b) {
     return a + (b - a) * rng_random(rng);
 }
 
@@ -51,8 +46,7 @@ float rng_uniform(RNG *rng, float a, float b)
 // random dataset generation
 
 // Structure to hold a data point
-typedef struct
-{
+typedef struct {
     float x;
     float y;
     int label;
@@ -60,12 +54,10 @@ typedef struct
 
 // Generate random dataset
 void gen_data(RNG *random, int n, DataPoint **train, int *train_size,
-              DataPoint **val, int *val_size, DataPoint **test, int *test_size)
-{
+              DataPoint **val, int *val_size, DataPoint **test, int *test_size) {
     DataPoint *pts = malloc(n * sizeof(DataPoint));
 
-    for (int i = 0; i < n; i++)
-    {
+    for (int i = 0; i < n; i++) {
         float x = rng_uniform(random, -2.0f, 2.0f);
         float y = rng_uniform(random, -2.0f, 2.0f);
 
@@ -85,16 +77,13 @@ void gen_data(RNG *random, int n, DataPoint **train, int *train_size,
     *val = malloc(*val_size * sizeof(DataPoint));
     *test = malloc(*test_size * sizeof(DataPoint));
 
-    for (int i = 0; i < *train_size; i++)
-    {
+    for (int i = 0; i < *train_size; i++) {
         (*train)[i] = pts[i];
     }
-    for (int i = 0; i < *val_size; i++)
-    {
+    for (int i = 0; i < *val_size; i++) {
         (*val)[i] = pts[*train_size + i];
     }
-    for (int i = 0; i < *test_size; i++)
-    {
+    for (int i = 0; i < *test_size; i++) {
         (*test)[i] = pts[*train_size + *val_size + i];
     }
 
@@ -105,179 +94,158 @@ void gen_data(RNG *random, int n, DataPoint **train, int *train_size,
 // micrograd engine
 
 // Value struct implementation
-typedef struct Value
-{
+typedef struct Value {
     double data;
     double grad;
     struct Value **_prev;
     int _prev_count;
     void (*_backward)(struct Value *);
     char *_op;
-    int refcount;
+    int ref_count; // Reference count for the Value
 } Value;
 
-Value *value_new(double data, Value **children, int n_children, const char *op)
-{
+Value *value_new(double data, Value **children, int n_children, const char *op) {
     Value *v = malloc(sizeof(Value));
     v->data = data;
     v->grad = 0.0;
     v->_prev = malloc(n_children * sizeof(Value *));
-    for (int i = 0; i < n_children; i++)
-    {
+    for (int i = 0; i < n_children; i++) {
         v->_prev[i] = children[i];
+        if (children[i]) {
+            children[i]->ref_count++;
+        }
     }
     v->_prev_count = n_children;
     v->_backward = NULL;
     v->_op = strdup(op);
-    v->refcount = 1;
-    for (int i = 0; i < n_children; i++)
-    {
-        if (children[i])
-            children[i]->refcount++;
-    }
+    v->ref_count = 0; // Initialize reference count
     return v;
 }
 
-void value_free(Value *v)
-{
+void value_free(Value *v) {
     if (!v) return;
-    v->refcount--;
-    if (v->refcount == 0)
-    {
-        for (int i = 0; i < v->_prev_count; i++)
-        {
-            if (v->_prev[i])
-                value_free(v->_prev[i]);
-        }
-        free(v->_prev);
-        free(v->_op);
-        free(v);
-    }
+    free(v->_prev);
+    free(v->_op);
+    free(v);
 }
 
-void backward_add(Value *v)
-{
+void value_free_recursive(Value *v) {
+    if (!v) return;
+    v->ref_count--;
+    if (v->ref_count > 0) return; // Only free if ref_count is zero
+
+    for (int i = 0; i < v->_prev_count; i++) {
+        if (v->_prev[i]) {
+            value_free_recursive(v->_prev[i]);
+        }
+    }
+    free(v->_prev);
+    free(v->_op);
+    free(v);
+}
+
+void backward_add(Value *v) {
     v->_prev[0]->grad += v->grad;
     v->_prev[1]->grad += v->grad;
 }
 
-Value *value_add(Value *a, Value *b)
-{
+Value *value_add(Value *a, Value *b) {
     Value *out = value_new(a->data + b->data, (Value *[]){a, b}, 2, "+");
     out->_backward = backward_add;
     return out;
 }
 
-void backward_mul(Value *v)
-{
+void backward_mul(Value *v) {
     v->_prev[0]->grad += v->_prev[1]->data * v->grad;
     v->_prev[1]->grad += v->_prev[0]->data * v->grad;
 }
 
-Value *value_mul(Value *a, Value *b)
-{
+Value *value_mul(Value *a, Value *b) {
     Value *out = value_new(a->data * b->data, (Value *[]){a, b}, 2, "*");
     out->_backward = backward_mul;
     return out;
 }
 
-void backward_pow(Value *v)
-{
+void backward_pow(Value *v) {
     double b = v->_prev[1]->data;
     v->_prev[0]->grad += (b * pow(v->_prev[0]->data, b - 1)) * v->grad;
 }
 
-Value *value_pow(Value *a, double b)
-{
+Value *value_pow(Value *a, double b) {
     Value *b_val = value_new(b, NULL, 0, "exponent");
     Value *out = value_new(pow(a->data, b), (Value *[]){a, b_val}, 2, "**");
     out->_backward = backward_pow;
-    value_free(b_val);  // we're decrementing the refcount here, there is still a reference in `out`
     return out;
 }
 
-void backward_relu(Value *v)
-{
+void backward_relu(Value *v) {
     v->_prev[0]->grad += (v->data > 0) * v->grad;
 }
 
-Value *value_relu(Value *a)
-{
+Value *value_relu(Value *a) {
     Value *out = value_new(a->data < 0 ? 0 : a->data, (Value *[]){a}, 1, "ReLU");
     out->_backward = backward_relu;
     return out;
 }
 
-void backward_tanh(Value *v)
-{
+void backward_tanh(Value *v) {
     v->_prev[0]->grad += (1 - v->data * v->data) * v->grad;
 }
 
-Value *value_tanh(Value *a)
-{
+Value *value_tanh(Value *a) {
     double t = tanh(a->data);
     Value *out = value_new(t, (Value *[]){a}, 1, "tanh");
     out->_backward = backward_tanh;
     return out;
 }
 
-void backward_exp(Value *v)
-{
+void backward_exp(Value *v) {
     v->_prev[0]->grad += v->data * v->grad;
 }
 
-Value *value_exp(Value *a)
-{
+Value *value_exp(Value *a) {
     double e = exp(a->data);
     Value *out = value_new(e, (Value *[]){a}, 1, "exp");
     out->_backward = backward_exp;
     return out;
 }
 
-void backward_log(Value *v)
-{
+void backward_log(Value *v) {
     v->_prev[0]->grad += (1 / v->_prev[0]->data) * v->grad;
 }
 
-Value *value_log(Value *a)
-{
+Value *value_log(Value *a) {
     Value *out = value_new(log(a->data), (Value *[]){a}, 1, "log");
     out->_backward = backward_log;
     return out;
 }
 
 // Helper function to check if a Value* is in an array
-int contains(Value **arr, int size, Value *v)
-{
-    for (int i = 0; i < size; i++)
-    {
+int contains(Value **arr, int size, Value *v) {
+    for (int i = 0; i < size; i++) {
         if (arr[i] == v)
             return 1;
     }
     return 0;
 }
 
-void build_topo(Value *v, Value **topo, int *topo_size, Value **visited, int *visited_size, int max_nodes)
-{
+void build_topo(Value *v, Value **topo, int *topo_size, Value **visited, int *visited_size, int max_nodes) {
     if (contains(visited, *visited_size, v))
         return;
-    if (*visited_size >= max_nodes)
-    {
+    if (*visited_size >= max_nodes) {
         fprintf(stderr, "Error: Exceeded maximum number of nodes in topological sort."
                         " Current max_nodes limit is %d\n",
                 max_nodes);
         exit(1);
     }
     visited[(*visited_size)++] = v;
-    for (int i = 0; i < v->_prev_count; i++)
-    {
+    for (int i = 0; i < v->_prev_count; i++) {
         build_topo(v->_prev[i], topo, topo_size, visited, visited_size, max_nodes);
     }
     topo[(*topo_size)++] = v;
 }
 
-void value_backward(Value *v)
-{
+void value_backward(Value *v) {
     // Topological sort
     // Adjust size as needed, for `mlp_new(&rng, 2, (int[]){16, 3}, 2)` it's 15,942 nodes!
     int max_nodes = 16000;
@@ -290,8 +258,7 @@ void value_backward(Value *v)
 
     // Go one variable at a time and apply the chain rule to get its gradient
     v->grad = 1.0;
-    for (int i = topo_size - 1; i >= 0; i--)
-    {
+    for (int i = topo_size - 1; i >= 0; i--) {
         if (topo[i]->_backward)
         {
             topo[i]->_backward(topo[i]);
@@ -306,23 +273,20 @@ void value_backward(Value *v)
 // neural network
 
 // Neuron struct implementation
-typedef struct Neuron
-{
+typedef struct Neuron {
     Value **w;
     Value *b;
     int nin;
     int nonlin;
 } Neuron;
 
-Neuron *neuron_new(RNG *random, int nin, int nonlin)
-{
+Neuron *neuron_new(RNG *random, int nin, int nonlin) {
     Neuron *n = malloc(sizeof(Neuron));
     n->w = malloc(nin * sizeof(Value *));
-    for (int i = 0; i < nin; i++)
-    {
+    for (int i = 0; i < nin; i++) {
         n->w[i] = value_new(rng_uniform(random, -1, 1) * pow(nin, -0.5), NULL, 0, "");
     }
-    n->b = value_new(0, NULL, 0, "");
+    n->b = value_new(0, NULL, 0, "bias");
     n->nin = nin;
     n->nonlin = nonlin;
     return n;
@@ -330,31 +294,21 @@ Neuron *neuron_new(RNG *random, int nin, int nonlin)
 
 void neuron_free(Neuron *n)
 {
-    for (int i = 0; i < n->nin; i++)
-    {
-        value_free(n->w[i]);
-    }
+    // only free the weights array, and neuron itself
     free(n->w);
-    value_free(n->b);
     free(n);
 }
 
-Value *neuron_call(Neuron *n, Value **x)
-{
+Value *neuron_call(Neuron *n, Value **x) {
     Value *act = n->b;
-    for (int i = 0; i < n->nin; i++)
-    {
+    for (int i = 0; i < n->nin; i++) {
         Value *mul_result = value_mul(n->w[i], x[i]);
         Value *new_act = value_add(act, mul_result);
-        value_free(mul_result);
-        value_free(act);
         act = new_act;
     }
 
-    if (n->nonlin)
-    {
+    if (n->nonlin) {
         Value *tanh_result = value_tanh(act);
-        value_free(act);
         return tanh_result;
     }
     else
@@ -363,11 +317,9 @@ Value *neuron_call(Neuron *n, Value **x)
     }
 }
 
-Value **neuron_parameters(Neuron *n)
-{
+Value **neuron_parameters(Neuron *n) {
     Value **params = malloc((n->nin + 1) * sizeof(Value *));
-    for (int i = 0; i < n->nin; i++)
-    {
+    for (int i = 0; i < n->nin; i++) {
         params[i] = n->w[i];
     }
     params[n->nin] = n->b;
@@ -375,19 +327,16 @@ Value **neuron_parameters(Neuron *n)
 }
 
 // Layer struct implementation
-typedef struct Layer
-{
+typedef struct Layer {
     Neuron **neurons;
     int nin;
     int nout;
 } Layer;
 
-Layer *layer_new(RNG *random, int nin, int nout, int nonlin)
-{
+Layer *layer_new(RNG *random, int nin, int nout, int nonlin) {
     Layer *l = malloc(sizeof(Layer));
     l->neurons = malloc(nout * sizeof(Neuron *));
-    for (int i = 0; i < nout; i++)
-    {
+    for (int i = 0; i < nout; i++) {
         l->neurons[i] = neuron_new(random, nin, nonlin);
     }
     l->nin = nin;
@@ -395,32 +344,26 @@ Layer *layer_new(RNG *random, int nin, int nout, int nonlin)
     return l;
 }
 
-void layer_free(Layer *l)
-{
-    for (int i = 0; i < l->nout; i++)
-    {
+void layer_free(Layer *l) {
+    for (int i = 0; i < l->nout; i++) {
         neuron_free(l->neurons[i]);
     }
     free(l->neurons);
     free(l);
 }
 
-Value **layer_call(Layer *l, Value **x)
-{
+Value **layer_call(Layer *l, Value **x) {
     Value **out = malloc(l->nout * sizeof(Value *));
-    for (int i = 0; i < l->nout; i++)
-    {
+    for (int i = 0; i < l->nout; i++) {
         out[i] = neuron_call(l->neurons[i], x);
     }
     return out;
 }
 
-Value **layer_parameters(Layer *l)
-{
+Value **layer_parameters(Layer *l) {
     Value **params = malloc(l->nout * (l->nin + 1) * sizeof(Value *));
     int idx = 0;
-    for (int i = 0; i < l->nout; i++)
-    {
+    for (int i = 0; i < l->nout; i++) {
         Value **neuron_params = neuron_parameters(l->neurons[i]);
         for (int j = 0; j < l->nin + 1; j++)
         {
@@ -432,61 +375,53 @@ Value **layer_parameters(Layer *l)
 }
 
 // MLP struct implementation
-typedef struct MLP
-{
+typedef struct MLP {
     Layer **layers;
     int n_layers;
 } MLP;
 
-MLP *mlp_new(RNG *random, int nin, int *nouts, int n_layers)
-{
+MLP *mlp_new(RNG *random, int nin, int *nouts, int n_layers) {
     MLP *m = malloc(sizeof(MLP));
     m->layers = malloc(n_layers * sizeof(Layer *));
     m->n_layers = n_layers;
     int sizes[n_layers + 1];
     sizes[0] = nin;
-    for (int i = 0; i < n_layers; i++)
-    {
+    for (int i = 0; i < n_layers; i++) {
         sizes[i + 1] = nouts[i];
     }
-    for (int i = 0; i < n_layers; i++)
-    {
+    for (int i = 0; i < n_layers; i++) {
         m->layers[i] = layer_new(random, sizes[i], sizes[i + 1], i != n_layers - 1);
     }
     return m;
 }
 
-void mlp_free(MLP *m)
-{
-    for (int i = 0; i < m->n_layers; i++)
-    {
+void mlp_free(MLP *m) {
+    for (int i = 0; i < m->n_layers; i++) {
         layer_free(m->layers[i]);
     }
     free(m->layers);
     free(m);
 }
 
-Value **mlp_call(MLP *m, Value **x)
-{
+Value **mlp_call(MLP *m, Value **x) {
     Value **out = x;
-    for (int i = 0; i < m->n_layers; i++)
-    {
-        out = layer_call(m->layers[i], out);
+    for (int i = 0; i < m->n_layers; i++) {
+        Value **out2 = layer_call(m->layers[i], out);
+        if (i > 0) // free the previous layer's output but not the input
+            free(out);
+        out = out2;
     }
     return out;
 }
 
-Value **mlp_parameters(MLP *m)
-{
+Value **mlp_parameters(MLP *m) {
     int total_params = 0;
-    for (int i = 0; i < m->n_layers; i++)
-    {
+    for (int i = 0; i < m->n_layers; i++) {
         total_params += m->layers[i]->nout * (m->layers[i]->nin + 1);
     }
     Value **params = malloc(total_params * sizeof(Value *));
     int idx = 0;
-    for (int i = 0; i < m->n_layers; i++)
-    {
+    for (int i = 0; i < m->n_layers; i++) {
         Value **layer_params = layer_parameters(m->layers[i]);
         for (int j = 0; j < m->layers[i]->nout * (m->layers[i]->nin + 1); j++)
         {
@@ -498,52 +433,46 @@ Value **mlp_parameters(MLP *m)
 }
 
 // Loss function
-Value *cross_entropy(Value **logits, int n_logits, int target)
-{
+Value *cross_entropy(Value **logits, int n_logits, int target) {
     double max_val = -DBL_MAX;
-    for (int i = 0; i < n_logits; i++)
-    {
+    for (int i = 0; i < n_logits; i++) {
         if (logits[i]->data > max_val)
             max_val = logits[i]->data;
     }
     Value **ex = malloc(n_logits * sizeof(Value *));
     Value *denom = value_new(0, NULL, 0, "");
-    for (int i = 0; i < n_logits; i++)
-    {
+    for (int i = 0; i < n_logits; i++) {
         ex[i] = value_exp(value_add(logits[i], value_new(-max_val, NULL, 0, "")));
         denom = value_add(denom, ex[i]);
     }
     Value **probs = malloc(n_logits * sizeof(Value *));
-    for (int i = 0; i < n_logits; i++)
-    {
+    for (int i = 0; i < n_logits; i++) {
         probs[i] = value_mul(ex[i], value_pow(denom, -1));
     }
     Value *logp = value_log(probs[target]);
     Value *nll = value_mul(logp, value_new(-1, NULL, 0, ""));
+    // TODO: Ali release memory for non probs[target] values
     free(ex);
     free(probs);
     return nll;
 }
 
 // Evaluation function
-double eval_split(MLP *model, DataPoint *split, int split_size)
-{
+double eval_split(MLP *model, DataPoint *split, int split_size) {
     Value *loss = value_new(0, NULL, 0, "");
-    for (int i = 0; i < split_size; i++)
-    {
+    for (int i = 0; i < split_size; i++) {
         Value *x[2] = {value_new(split[i].x, NULL, 0, ""), value_new(split[i].y, NULL, 0, "")};
         Value **logits = mlp_call(model, x);
         loss = value_add(loss, cross_entropy(logits, 3, split[i].label));
         free(logits);
     }
     double result = loss->data / split_size;
-    value_free(loss);
+    value_free_recursive(loss);
     return result;
 }
 
 // Training function
-void train(MLP *model, DataPoint *train_split, int train_size, DataPoint *val_split, int val_size)
-{
+void train(MLP *model, DataPoint *train_split, int train_size, DataPoint *val_split, int val_size) {
     double learning_rate = 0.1;
     double beta1 = 0.9;
     double beta2 = 0.95;
@@ -551,15 +480,13 @@ void train(MLP *model, DataPoint *train_split, int train_size, DataPoint *val_sp
 
     Value **params = mlp_parameters(model);
     int n_params = 0;
-    for (int i = 0; i < model->n_layers; i++)
-    {
+    for (int i = 0; i < model->n_layers; i++) {
         n_params += model->layers[i]->nout * (model->layers[i]->nin + 1);
     }
     double *m = calloc(n_params, sizeof(double));
     double *v = calloc(n_params, sizeof(double));
 
-    for (int step = 0; step < 100; step++)
-    {
+    for (int step = 0; step < 1; step++) {
         if (step % 10 == 0)
         {
             double val_loss = eval_split(model, val_split, val_size);
@@ -590,7 +517,7 @@ void train(MLP *model, DataPoint *train_split, int train_size, DataPoint *val_sp
         }
 
         printf("step %d, train loss %.12f\n", step, loss->data);
-        value_free(loss);
+        value_free_recursive(loss);
     }
 
     free(m);
@@ -602,8 +529,7 @@ void train(MLP *model, DataPoint *train_split, int train_size, DataPoint *val_sp
 
 #ifndef TESTING
 // if we are TESTING (see test_micrograd.c), we'll skip the int main below
-int main(void)
-{
+int main(void) {
     RNG rng;
     rng_init(&rng, 42);
 

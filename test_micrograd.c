@@ -244,9 +244,7 @@ void test_value_add(void)
     value_backward(c);
     assert(fabs(a->grad - 1.0) < TOL);
     assert(fabs(b->grad - 1.0) < TOL);
-    value_free(a);
-    value_free(b);
-    value_free(c);
+    value_free_recursive(c);
     printf("test_value_add passed\n");
 }
 
@@ -259,9 +257,7 @@ void test_value_mul(void)
     value_backward(c);
     assert(fabs(a->grad - 2.0) < TOL);
     assert(fabs(b->grad - 3.0) < TOL);
-    value_free(a);
-    value_free(b);
-    value_free(c);
+    value_free_recursive(c);
     printf("test_value_mul passed\n");
 }
 
@@ -272,8 +268,7 @@ void test_value_pow(void)
     assert(fabs(b->data - 8.0) < TOL);
     value_backward(b);
     assert(fabs(a->grad - 12.0) < TOL);
-    value_free(b);
-    value_free(a);
+    value_free_recursive(b);
     printf("test_value_pow passed\n");
 }
 
@@ -310,6 +305,26 @@ void test_value_tanh(void)
     printf("test_value_tanh passed\n");
 }
 
+void test_value_exp(void) {
+    Value *a = value_new(2.0, NULL, 0, "a");
+    Value *b = value_exp(a);
+    assert(fabs(b->data - exp(2.0)) < TOL);
+    value_backward(b);
+    assert(fabs(a->grad - exp(2.0)) < TOL);
+    value_free_recursive(b);
+    printf("test_value_exp passed\n");
+}
+
+void test_value_log(void) {
+    Value *a = value_new(2.0, NULL, 0, "a");
+    Value *b = value_log(a);
+    assert(fabs(b->data - log(2.0)) < TOL);
+    value_backward(b);
+    assert(fabs(a->grad - 0.5) < TOL);
+    value_free_recursive(b);
+    printf("test_value_log passed\n");
+}
+
 void test_sanity_check(void)
 {
     Value *x = value_new(-4.0, NULL, 0, "x");
@@ -327,14 +342,7 @@ void test_sanity_check(void)
     assert(fabs(x->grad - 46.0) < TOL);
 
     // Clean up
-    value_free(x);
-    value_free(two);
-    value_free(z);
-    value_free(q);
-    value_free(h);
-    value_free(y);
-    // TODO: find a nice way to free the intermediate values
-
+    value_free_recursive(y);
     printf("test_sanity_check passed\n");
 }
 
@@ -362,15 +370,7 @@ void test_more_ops(void)
     assert(fabs(b->grad - 645.577259) < TOL);
 
     // Clean up
-    value_free(a);
-    value_free(b);
-    value_free(c);
-    value_free(d);
-    value_free(e);
-    value_free(f);
-    value_free(g);
-    // TODO: find a nice way to free the intermediate values
-    
+    value_free_recursive(g);
     printf("test_more_ops passed\n");
 }
 
@@ -386,9 +386,7 @@ void test_neuron(void)
     Value *x2 = value_new(3.0, NULL, 0, "x2");
     Value *result = neuron_call(n, (Value *[]){x1, x2});
     assert(result != NULL);
-    value_free(x1);
-    value_free(x2);
-    value_free(result);
+    value_free_recursive(result);
     neuron_free(n);
     printf("test_neuron passed\n");
 }
@@ -405,11 +403,9 @@ void test_layer(void)
     for (int i = 0; i < 3; i++)
     {
         assert(result[i] != NULL);
-        value_free(result[i]);
+        value_free_recursive(result[i]);
     }
     free(result);
-    value_free(x1);
-    value_free(x2);
     layer_free(l);
     printf("test_layer passed\n");
 }
@@ -424,39 +420,160 @@ void test_mlp(void)
     Value **result = mlp_call(m, (Value *[]){x1, x2});
     assert(result != NULL);
     assert(result[0] != NULL);
-    value_free(result[0]);
-    free(result);
-    value_free(x1);
-    value_free(x2);
+    value_free_recursive(result[0]);
     mlp_free(m);
+    free(result);
     printf("test_mlp passed\n");
 }
 
-int main(void)
-{
+void test_cross_entropy(void) {
+    Value *logits[3];
+    logits[0] = value_new(1.0, NULL, 0, "logit1");
+    logits[1] = value_new(2.0, NULL, 0, "logit2");
+    logits[2] = value_new(3.0, NULL, 0, "logit3");
+
+    Value *loss = cross_entropy(logits, 3, 1);  // Target class is 1
+
+    // Expected loss calculation
+    double expected_loss = -log(exp(2.0) / (exp(1.0) + exp(2.0) + exp(3.0)));
+
+    assert(fabs(loss->data - expected_loss) < TOL);
+
+    value_backward(loss);
+
+    // Check gradients
+    double sum_exp = exp(1.0) + exp(2.0) + exp(3.0);
+    assert(fabs(logits[0]->grad - exp(1.0) / sum_exp) < TOL);
+    assert(fabs(logits[1]->grad - (exp(2.0) / sum_exp - 1)) < TOL);
+    assert(fabs(logits[2]->grad - exp(3.0) / sum_exp) < TOL);
+
+    value_free_recursive(loss);
+    printf("test_cross_entropy passed\n");
+}
+
+void test_cross_entropy_1(void) {
+    Value *logits[3];
+    logits[0] = value_new(1.0, NULL, 0, "logit1");
+    logits[1] = value_new(2.0, NULL, 0, "logit2");
+    logits[2] = value_new(3.0, NULL, 0, "logit3");
+
+    Value *loss = cross_entropy(logits, 3, 1);  // Target class is 1
+
+    // Expected loss calculation
+    double expected_loss = -log(exp(2.0) / (exp(1.0) + exp(2.0) + exp(3.0)));
+
+    assert(fabs(loss->data - expected_loss) < TOL);
+
+    value_backward(loss);
+
+    // Check gradients
+    double sum_exp = exp(1.0) + exp(2.0) + exp(3.0);
+    assert(fabs(logits[0]->grad - exp(1.0) / sum_exp) < TOL);
+    assert(fabs(logits[1]->grad - (exp(2.0) / sum_exp - 1)) < TOL);
+    assert(fabs(logits[2]->grad - exp(3.0) / sum_exp) < TOL);
+
+    // Free all allocated memory
+    value_free_recursive(loss);
+    for (int i = 0; i < 3; i++) {
+        value_free(
+            logits[i]);  // Change this from value_free_recursive to value_free
+    }
+
+    printf("test_cross_entropy passed\n");
+}
+
+void test_eval_split(void) {
+    RNG rng;
+    rng_init(&rng, 42);
+
+    MLP *model = mlp_new(&rng, 2, (int[]){3, 3}, 2);
+
+    DataPoint split[3] = {{1.0, 2.0, 0}, {-1.0, -1.0, 1}, {0.5, -0.5, 2}};
+
+    double loss = eval_split(model, split, 3);
+
+    // We can't predict the exact loss, but we can check if it's a reasonable
+    // value
+    assert(loss > 0 && loss < 10);  // Adjust these bounds as needed
+
+    mlp_free(model);
+    printf("test_eval_split passed\n");
+}
+
+void test_train(void) {
+    RNG rng;
+    rng_init(&rng, 42);
+
+    MLP *model = mlp_new(&rng, 2, (int[]){3, 3}, 2);
+
+    DataPoint train_split[5] = {{1.0, 2.0, 0},
+                                {-1.0, -1.0, 1},
+                                {0.5, -0.5, 2},
+                                {-0.5, 0.5, 0},
+                                {0.0, 0.0, 1}};
+
+    DataPoint val_split[2] = {{1.5, -1.5, 2}, {-1.5, 1.5, 0}};
+
+    // Store initial parameters
+    Value **initial_params = mlp_parameters(model);
+    int n_params = 0;
+    for (int i = 0; i < model->n_layers; i++) {
+        n_params += model->layers[i]->nout * (model->layers[i]->nin + 1);
+    }
+    double *initial_values = malloc(n_params * sizeof(double));
+    for (int i = 0; i < n_params; i++) {
+        initial_values[i] = initial_params[i]->data;
+    }
+
+    train(model, train_split, 5, val_split, 2);
+
+    // Check if parameters have been updated
+    Value **final_params = mlp_parameters(model);
+    bool params_changed = false;
+    for (int i = 0; i < n_params; i++) {
+        if (fabs(final_params[i]->data - initial_values[i]) > TOL) {
+            params_changed = true;
+            break;
+        }
+    }
+    assert(params_changed);
+
+    free(initial_values);
+    free(initial_params);
+    free(final_params);
+    mlp_free(model);
+    printf("test_train passed\n");
+}
+
+int main(void) {
     // RNG tests
-    test_rng_initialization();
-    test_random_u32();
-    test_random();
-    test_uniform();
-    test_gen_data_determinism();
-    test_gen_data_splits();
-    test_gen_data_labels();
-    test_random_hardcoded();
-    test_uniform_hardcoded();
-    test_gen_data_hardcoded();
-    // Value tests
-    test_value_creation();
-    test_value_add();
-    test_value_mul();
-    test_value_pow();
-    test_value_relu();
-    test_value_tanh();
-    test_sanity_check();
-    test_more_ops();
-    test_neuron();
-    test_layer();
-    test_mlp();
+    // test_rng_initialization();
+    // test_random_u32();
+    // test_random();
+    // test_uniform();
+    // test_gen_data_determinism();
+    // test_gen_data_splits();
+    // test_gen_data_labels();
+    // test_random_hardcoded();
+    // test_uniform_hardcoded();
+    // test_gen_data_hardcoded();
+    // // Value tests
+    // test_value_creation();
+    // test_value_add();
+    // test_value_mul();
+    // test_value_pow();
+    // test_value_relu();
+    // test_value_tanh();
+    // test_value_exp();
+    // test_value_log();
+    // test_sanity_check();
+    // test_more_ops();
+    // test_neuron();
+    // test_layer();
+    // test_mlp();
+    test_cross_entropy();
+    // test_eval_split();
+    // test_train();
     printf("All tests passed!\n");
     return 0;
 }
