@@ -76,11 +76,6 @@ def gen_data_yinyang(random: RNG, n=1000, r_small=0.1, r_big=0.5):
 # -----------------------------------------------------------------------------
 # visualization related
 
-def vis_color(nodes, color):
-    # colors a set of nodes (for visualization)
-    for n in nodes:
-        setattr(n, '_vis_color', color)
-
 def trace(root):
     # traces the full graph of nodes and edges starting from the root
     nodes, edges = [], []
@@ -101,21 +96,77 @@ def draw_dot(root, format='svg', rankdir='LR', outfile='graph'):
     """
     # brew install graphviz
     # pip install graphviz
-    from graphviz import Digraph
+    from micrograd import ValueType
+    try:
+        from graphviz import Digraph
+    except ModuleNotFoundError:
+        print("graphviz not installed? visualization skipped")
+        return
     assert rankdir in ['LR', 'TB']
     nodes, edges = trace(root)
-    dot = Digraph(format=format, graph_attr={'rankdir': rankdir, 'nodesep': '0.1', 'ranksep': '0.4'})
+    main_graph = Digraph(format=format, graph_attr={'newrank': 'true', 'rankdir': rankdir, 'nodesep': '0.1', 'ranksep': '0.4', 'splines': 'true', 'pad': '0.5', 'width': '100%'})
+    value_type_colors = {
+        ValueType.Input.value: 'lightblue',
+        ValueType.Weight.value: 'lightgreen',
+        ValueType.Bias.value: 'pink',
+        ValueType.Intermediate.value: 'white',
+        ValueType.Loss.value: 'orange',
+    }
 
+    # Create subgraphs for each layer
+    layer_subgraphs = {}
     for n in nodes:
-        fillcolor = n._vis_color if hasattr(n, '_vis_color') else "white"
-        dot.node(name=str(id(n)), label="data: %.4f\ngrad: %.4f" % (n.data, n.grad), shape='box', style='filled', fillcolor=fillcolor, width='0.1', height='0.1', fontsize='10')
+        if n.layer_idx is not None:
+            if n.layer_idx not in layer_subgraphs:
+                sub = Digraph(name=f'cluster_layer_{n.layer_idx}', format=format, graph_attr={
+                    'rankdir': rankdir, 'nodesep': '0.1', 'ranksep': '0.4', #'rank': 'same'
+                    'splines': 'true', 'pad': '0.5', 'width': '100%'
+                })
+                sub.attr(label=f'Layer {n.layer_idx}', fontname='HelveticaNeue-Light', color='#c2def7', fontcolor='#3399ff')
+                layer_subgraphs[n.layer_idx] = sub
+
+    node_args = lambda n: {
+        'name': str(id(n)),
+        'label': "data: %.4f\ngrad: %.4f" % (n.data, n.grad),
+        'fillcolor': value_type_colors[n.type.value],
+        'shape': 'box',
+        'style': 'filled',
+        'width': '0.2',
+        'height': '0.2',
+        'fontsize': '10'
+    }
+    for n in nodes:
+        if n.layer_idx is not None:
+            layer_subgraphs[n.layer_idx].node(**node_args(n))
+        else:
+            main_graph.node(**node_args(n))
         if n._op:
-            dot.node(name=str(id(n)) + n._op, label=n._op, width='0.1', height='0.1', fontsize='10')
-            dot.edge(str(id(n)) + n._op, str(id(n)), minlen='1')
+            op_node_args = node_args(n)
+            op_node_args['label'] = n._op
+            op_node_args['name'] = str(id(n)) + n._op
+            if n.layer_idx is not None:
+                layer_subgraphs[n.layer_idx].node(**op_node_args)
+                layer_subgraphs[n.layer_idx].edge(str(id(n)) + n._op, str(id(n)), minlen='1')
+            else:
+                main_graph.node(**op_node_args)
+                main_graph.edge(str(id(n)) + n._op, str(id(n)), minlen='1')
 
     for n1, n2 in edges:
-        dot.edge(str(id(n1)), str(id(n2)) + n2._op, minlen='1')
+        edge_args = lambda n1, n2: {
+            'tail_name': str(id(n1)),
+            'head_name': str(id(n2)) + n2._op,
+            'minlen': '1'
+        }
+        if n1.layer_idx == n2.layer_idx and n1.layer_idx is not None:
+            layer_subgraphs[n1.layer_idx].edge(**edge_args(n1, n2))
+        else:
+            main_graph.edge(**edge_args(n1, n2))
+
+    # Add layer subgraphs to main graph
+    for layer_idx in sorted(layer_subgraphs.keys()):
+        main_graph.subgraph(layer_subgraphs[layer_idx])
 
     print("found a total of ", len(nodes), "nodes and", len(edges), "edges")
     print("saving graph to", outfile + "." + format)
-    dot.render(outfile, format=format)
+    main_graph.render(outfile, format=format)
+    # print(main_graph.source)
